@@ -125,18 +125,28 @@ export function BellMenu() {
     return result.sort((a, b) => b.order - a.order).slice(0, 12);
   }, [projects, user]);
 
-  const unreadCount = useMemo(
-    () => notifs.filter((n) => !readIds.has(n.id)).length,
+  // Solo mostramos las que aún no leyó el usuario.
+  const visibleNotifs = useMemo(
+    () => notifs.filter((n) => !readIds.has(n.id)),
     [notifs, readIds],
   );
+  const unreadCount = visibleNotifs.length;
 
   const markAllRead = () => {
-    if (notifs.length === 0) return;
+    if (visibleNotifs.length === 0) return;
     const next = new Set(readIds);
-    notifs.forEach((n) => next.add(n.id));
+    visibleNotifs.forEach((n) => next.add(n.id));
     setReadIds(next);
     saveReadIds(next);
     showToast("Notificaciones marcadas");
+  };
+
+  const markOneRead = (id: string) => {
+    if (readIds.has(id)) return;
+    const next = new Set(readIds);
+    next.add(id);
+    setReadIds(next);
+    saveReadIds(next);
   };
 
   const dropdown =
@@ -167,7 +177,7 @@ export function BellMenu() {
           </button>
         </div>
 
-        {notifs.length === 0 ? (
+        {visibleNotifs.length === 0 ? (
           <div className="px-3 py-8 text-center">
             <p className="font-serif text-sm mb-1">Todo en orden.</p>
             <p className="text-muted text-[11px]">
@@ -176,35 +186,32 @@ export function BellMenu() {
           </div>
         ) : (
           <div className="max-h-[60vh] overflow-y-auto scroll">
-            {notifs.map((n) => {
-              const unread = !readIds.has(n.id);
-              return (
-                <Link
-                  key={n.id}
-                  href={n.href}
-                  onClick={() => setOpen(false)}
-                  className="flex gap-2.5 p-3 border-t border-hairline-2 hover:bg-paper-2 transition-colors"
+            {visibleNotifs.map((n) => (
+              <Link
+                key={n.id}
+                href={n.href}
+                onClick={() => {
+                  markOneRead(n.id);
+                  setOpen(false);
+                }}
+                className="flex gap-2.5 p-3 border-t border-hairline-2 hover:bg-paper-2 transition-colors"
+                style={{ background: "var(--cobalt-soft)" }}
+              >
+                <span
+                  className="w-1.5 h-1.5 rounded-full mt-2 shrink-0"
                   style={{
-                    background: unread ? "var(--cobalt-soft)" : undefined,
+                    background: n.warn ? "var(--pink)" : "var(--cobalt)",
                   }}
-                >
-                  <span
-                    className="w-1.5 h-1.5 rounded-full mt-2 shrink-0"
-                    style={{
-                      background: n.warn ? "var(--pink)" : "var(--cobalt)",
-                      opacity: unread ? 1 : 0.35,
-                    }}
-                  />
-                  <div className="text-[13px] leading-snug min-w-0 flex-1">
-                    <span className="font-semibold">{n.who}</span>{" "}
-                    <span className="text-muted">{n.what}</span>
-                    <div className="font-mono text-[10px] text-muted mt-1 tracking-[0.1em]">
-                      {n.when}
-                    </div>
+                />
+                <div className="text-[13px] leading-snug min-w-0 flex-1">
+                  <span className="font-semibold">{n.who}</span>{" "}
+                  <span className="text-muted">{n.what}</span>
+                  <div className="font-mono text-[10px] text-muted mt-1 tracking-[0.1em]">
+                    {n.when}
                   </div>
-                </Link>
-              );
-            })}
+                </div>
+              </Link>
+            ))}
           </div>
         )}
       </div>

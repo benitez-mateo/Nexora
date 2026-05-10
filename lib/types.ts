@@ -27,6 +27,8 @@ export interface ChatMessage {
   who: string;
   time: string;
   text: string;
+  /** Avatar del autor en el momento de enviar. Puede ser un id de preset o un data-URL. */
+  avatar?: string;
   reacts?: ChatReaction[];
   pinned?: boolean;
   alert?: boolean;

@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ChatPanel } from "@/components/chat/ChatPanel";
+import { OfflineBanner } from "@/components/primitives/OfflineBanner";
 import { Toast } from "@/components/primitives/Toast";
 import { useMediaQuery, BREAKPOINT } from "@/lib/use-media-query";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -44,6 +45,7 @@ export function NavShell({ children }: { children: React.ReactNode }) {
       </div>
       {showChat && <ChatPanel />}
       <Toast message={toast} />
+      <OfflineBanner />
     </>
   );
 }

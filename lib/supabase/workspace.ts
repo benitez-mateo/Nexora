@@ -26,6 +26,7 @@ interface MessageRow {
   id: string;
   project_id: string;
   who: string;
+  avatar: string | null;
   time: string;
   text: string;
   reacts: ChatMessage["reacts"];
@@ -51,6 +52,7 @@ function messageFromRow(row: MessageRow): ChatMessage {
   return {
     id: row.id,
     who: row.who,
+    avatar: row.avatar ?? undefined,
     time: row.time,
     text: row.text,
     reacts: row.reacts ?? [],
@@ -143,6 +145,7 @@ export async function insertMessage(projectId: string, message: ChatMessage) {
     id: message.id,
     project_id: projectId,
     who: message.who,
+    avatar: message.avatar ?? null,
     time: message.time,
     text: message.text,
     reacts: message.reacts ?? [],

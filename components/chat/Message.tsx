@@ -9,7 +9,10 @@ export function Message({ m }: { m: ChatMessage }) {
   const { user } = useAuth();
   const mine = m.who === "You" || (user && m.who === user.name);
   const displayName = mine ? user?.name ?? "Tú" : m.who;
-  const avatarValue = mine ? user?.avatar : undefined;
+  // El avatar se guarda con el mensaje al enviarlo (denormalizado).
+  // Si el mensaje es nuestro y no tiene avatar (mensajes viejos antes del cambio),
+  // caemos al avatar actual del usuario logueado.
+  const avatarValue = m.avatar ?? (mine ? user?.avatar : undefined);
   const isAlert = m.alert;
 
   return (

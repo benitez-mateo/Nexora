@@ -693,6 +693,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       const message: ChatMessage = {
         id: createId(),
         who: senderName,
+        avatar: user?.avatar,
         time: nowTime(),
         text: trimmed,
         reacts: [],
@@ -750,6 +751,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     appendMessageOptimistic(currentProjectId, {
       id: createId(),
       who: senderName,
+      avatar: user?.avatar,
       time: nowTime(),
       text: `⚠ Alerta de retraso difundida — la fase "${stepName}" requiere apoyo del equipo para cumplir la fecha de entrega ${target.date}.`,
       reacts: [],
