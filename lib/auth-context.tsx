@@ -52,6 +52,8 @@ interface AuthContextValue {
     currentPassword: string,
     newPassword: string,
   ) => Promise<AuthResult>;
+  /** Elimina la cuenta y cierra la sesión. */
+  deleteAccount: (password: string) => Promise<AuthResult>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -398,6 +400,54 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [user],
   );
 
+  /* ---- Delete account ---- */
+  const deleteAccount = useCallback(
+    async (password: string): Promise<AuthResult> => {
+      if (!user) return { ok: false, error: "Sesión no encontrada." };
+      if (!password)
+        return { ok: false, error: "Confirma tu contraseña." };
+
+      if (remote.current) {
+        const supabase = getSupabaseClient();
+        if (!supabase) return { ok: false, error: "Supabase no disponible." };
+
+        // Re-autentica para validar la contraseña antes de borrar.
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email: user.email,
+          password,
+        });
+        if (signInError)
+          return { ok: false, error: "Contraseña incorrecta." };
+
+        const { error } = await supabase.rpc("delete_my_account");
+        if (error)
+          return {
+            ok: false,
+            error:
+              error.message.includes("function") &&
+              error.message.includes("does not exist")
+                ? "Falta la función delete_my_account() en Supabase. Ejecuta supabase/delete_account.sql."
+                : error.message,
+          };
+
+        await supabase.auth.signOut();
+        setUser(null);
+        return { ok: true };
+      }
+
+      // Modo local
+      const hash = await hashPassword(password);
+      if (hash !== user.passwordHash)
+        return { ok: false, error: "Contraseña incorrecta." };
+      const remaining = loadLocalUsers().filter((u) => u.id !== user.id);
+      saveLocalUsers(remaining);
+      localStorage.removeItem(SESSION_KEY);
+      setUser(null);
+      return { ok: true };
+    },
+    [user],
+  );
+
   return (
     <AuthContext.Provider
       value={{
@@ -409,6 +459,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         logout,
         updateProfile,
         changePassword,
+        deleteAccount,
       }}
     >
       {children}

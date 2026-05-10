@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AvatarPicker } from "@/components/auth/AvatarPicker";
 import { PasswordInput } from "@/components/auth/PasswordInput";
@@ -26,6 +27,7 @@ export function AjustesPage() {
         <AppearanceSection />
         <DataSection />
         <UpcomingSection />
+        {user && <DangerZoneSection />}
       </div>
     </>
   );
@@ -491,6 +493,202 @@ function SuccessBanner({ msg }: { msg: string }) {
         <path d="M5 12.5l4.5 4.5L19 7" />
       </svg>
       <span>{msg}</span>
+    </div>
+  );
+}
+
+function DangerZoneSection() {
+  const [modalOpen, setModalOpen] = useState(false);
+
+  return (
+    <>
+      <section
+        className="grain rounded-design border overflow-hidden"
+        style={{
+          background: "var(--paper)",
+          boxShadow: "var(--shadow-sm)",
+          borderColor: "var(--pink)",
+        }}
+      >
+        <header
+          className="px-5 pt-4 pb-3 border-b"
+          style={{ borderColor: "var(--pink-soft)" }}
+        >
+          <h2
+            className="font-serif text-lg font-medium"
+            style={{ color: "var(--pink)" }}
+          >
+            Zona de peligro
+          </h2>
+        </header>
+        <div className="px-5 py-2">
+          <Setting
+            label="Eliminar mi cuenta"
+            description="Borra tu cuenta de forma permanente. No se puede deshacer. Los proyectos del equipo no se borran (siguen disponibles para los demás)."
+          >
+            <button
+              type="button"
+              onClick={() => setModalOpen(true)}
+              className="px-4 py-2 rounded-lg font-mono text-[10.5px] tracking-[0.14em] uppercase transition-colors"
+              style={{
+                color: "white",
+                background: "var(--pink)",
+                border: "1px solid var(--pink)",
+              }}
+            >
+              Eliminar cuenta
+            </button>
+          </Setting>
+        </div>
+      </section>
+
+      <DeleteAccountModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+      />
+    </>
+  );
+}
+
+function DeleteAccountModal({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const { user, deleteAccount } = useAuth();
+  const router = useRouter();
+  const [confirmText, setConfirmText] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Reset al abrir/cerrar.
+  useEffect(() => {
+    if (!open) {
+      setConfirmText("");
+      setPassword("");
+      setError(null);
+      setBusy(false);
+    }
+  }, [open]);
+
+  // ESC para cerrar.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) onClose();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [open, busy, onClose]);
+
+  if (!open || !user) return null;
+
+  const canConfirm =
+    confirmText.trim().toUpperCase() === "ELIMINAR" &&
+    password.length > 0 &&
+    !busy;
+
+  const submit = async () => {
+    if (!canConfirm) return;
+    setError(null);
+    setBusy(true);
+    const res = await deleteAccount(password);
+    if (!res.ok) {
+      setError(res.error ?? "No se pudo eliminar la cuenta.");
+      setBusy(false);
+      return;
+    }
+    // Cuenta eliminada — redirige al login.
+    router.push("/");
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] grid place-items-center p-4"
+      style={{ background: "rgba(0,0,0,0.65)", backdropFilter: "blur(6px)" }}
+      onClick={() => !busy && onClose()}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-account-title"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="grain rounded-design border w-full max-w-md p-6 sm:p-8 flex flex-col gap-5"
+        style={{
+          background: "var(--paper)",
+          boxShadow: "var(--shadow-lg)",
+          borderColor: "var(--pink)",
+        }}
+      >
+        <header>
+          <div
+            className="font-mono text-[10px] tracking-[0.16em] uppercase mb-2"
+            style={{ color: "var(--pink)" }}
+          >
+            Acción permanente
+          </div>
+          <h2
+            id="delete-account-title"
+            className="font-serif text-2xl font-medium leading-tight tracking-[-0.01em]"
+          >
+            ¿Eliminar tu cuenta?
+          </h2>
+          <p className="text-sm text-muted mt-2 leading-relaxed">
+            Tu correo, nombre y avatar se borrarán de Nexora. No podrás iniciar
+            sesión otra vez con <span className="font-mono">{user.email}</span>.
+            Los proyectos que creaste seguirán disponibles para tu equipo.
+          </p>
+        </header>
+
+        <Field label='Escribe "ELIMINAR" para confirmar'>
+          <input
+            value={confirmText}
+            onChange={(e) => setConfirmText(e.target.value)}
+            className="field-input"
+            placeholder="ELIMINAR"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </Field>
+
+        <Field label="Tu contraseña actual">
+          <PasswordInput
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            placeholder="Contraseña"
+          />
+        </Field>
+
+        {error && <ErrorBanner msg={error} />}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="btn-ghost disabled:opacity-40"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={!canConfirm}
+            className="px-4 py-2 rounded-lg font-mono text-[10.5px] tracking-[0.14em] uppercase transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{
+              color: "white",
+              background: "var(--pink)",
+              border: "1px solid var(--pink)",
+            }}
+          >
+            {busy ? "Eliminando..." : "Eliminar definitivamente"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
