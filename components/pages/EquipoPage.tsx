@@ -1,12 +1,15 @@
 "use client";
 
+import { useState } from "react";
 import { Avatar } from "@/components/primitives/Avatar";
 import { TEAM } from "@/lib/data";
 import { useWorkspace } from "@/lib/workspace-context";
+import { InviteMemberModal } from "./InviteMemberModal";
 import { PageHeader } from "./PageHeader";
 
 export function EquipoPage() {
   const { steps } = useWorkspace();
+  const [inviteOpen, setInviteOpen] = useState(false);
 
   const taskCountFor = (name: string) =>
     steps.filter(
@@ -23,10 +26,15 @@ export function EquipoPage() {
         title="Quién está construyendo"
         description="Roles, carga de trabajo y disponibilidad de cada integrante del proyecto."
         action={
-          <button className="btn-cobalt" disabled title="Próximamente">
+          <button onClick={() => setInviteOpen(true)} className="btn-cobalt">
             + Invitar miembro
           </button>
         }
+      />
+
+      <InviteMemberModal
+        open={inviteOpen}
+        onClose={() => setInviteOpen(false)}
       />
 
       {TEAM.length === 0 && (
