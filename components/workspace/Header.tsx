@@ -14,7 +14,7 @@ interface HeaderProps {
 }
 
 export function Header({ onOpenDrawer }: HeaderProps) {
-  const { chatOpen, toggleChat, showToast } = useWorkspace();
+  const { chatOpen, toggleChat } = useWorkspace();
   const pathname = usePathname();
   const onProjectWorkspace = /^\/proyectos\/[^/]+$/.test(pathname);
 
@@ -48,10 +48,7 @@ export function Header({ onOpenDrawer }: HeaderProps) {
       </div>
 
       <div className="flex items-center gap-3 sm:gap-4 flex-wrap justify-end">
-        <BellMenu
-          count={3}
-          onMarkRead={() => showToast("Notificaciones marcadas")}
-        />
+        <BellMenu />
 
         <button
           onClick={toggleChat}
