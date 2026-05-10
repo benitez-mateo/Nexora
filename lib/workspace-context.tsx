@@ -13,6 +13,15 @@ import {
 import { useAuth } from "./auth-context";
 import { AUTOREPLIES, INITIAL_PROJECTS } from "./data";
 import { persistence, SCHEMA_VERSION } from "./persistence";
+import { isSupabaseConfigured } from "./supabase/client";
+import {
+  deleteProjectRow,
+  insertMessage,
+  insertProject,
+  loadAllProjects,
+  subscribeWorkspace,
+  updateProjectRow,
+} from "./supabase/workspace";
 import type {
   ChatMessage,
   Deliverable,
@@ -46,6 +55,8 @@ interface WorkspaceContextValue {
   projects: Project[];
   currentProject: Project | null;
   hydrated: boolean;
+  /** True si los datos viven en Supabase (compartidos con el equipo). */
+  remote: boolean;
 
   addProject: (input: NewProjectInput) => string;
   removeProject: (id: string) => void;
@@ -98,6 +109,17 @@ const createId = () =>
     : `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const newStepId = () => Date.now() + Math.floor(Math.random() * 1000);
+
+/** Genera un UUID v4 compatible con Postgres `uuid`. */
+const newProjectId = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : // Fallback v4 manual (suficiente para entornos sin crypto.randomUUID).
+      "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === "x" ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      });
 
 function renumber(steps: Step[]): Step[] {
   return steps.map((s, i) => ({ ...s, num: String(i + 1).padStart(2, "0") }));
@@ -166,8 +188,13 @@ function reconcile(steps: Step[]): Step[] {
   return ensureActive(maybeAutoComplete(steps));
 }
 
-const newProjectId = () =>
-  `p-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function hydrateProjects(list: Project[]): Project[] {
+  return list.map((p) => ({
+    ...p,
+    steps: reconcile(p.steps),
+    activeStepId: p.activeStepId ?? deriveActiveId(reconcile(p.steps)),
+  }));
+}
 
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
@@ -179,7 +206,29 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [typing, setTyping] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+
+  // Modo de almacenamiento (no cambia durante la vida del proceso).
+  const remote = useRef(isSupabaseConfigured());
+
+  // Para el modo localStorage: detección de echos en cross-tab sync.
   const lastSavedAt = useRef(0);
+
+  // Refetch deduplicado para no martillar Supabase si llegan muchos eventos juntos.
+  const refetchTimer = useRef<number | null>(null);
+  const queueRefetch = useCallback(() => {
+    if (!remote.current) return;
+    if (refetchTimer.current != null) {
+      window.clearTimeout(refetchTimer.current);
+    }
+    refetchTimer.current = window.setTimeout(async () => {
+      try {
+        const fresh = await loadAllProjects();
+        setProjects(hydrateProjects(fresh));
+      } catch (err) {
+        console.error("Supabase refetch failed:", err);
+      }
+    }, 120);
+  }, []);
 
   const currentProjectId = useMemo(() => {
     const match = pathname.match(/^\/proyectos\/([^/?]+)$/);
@@ -191,18 +240,34 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     [projects, currentProjectId],
   );
 
+  /* ===== Hidratación inicial ===== */
   useEffect(() => {
+    let cancelled = false;
+
+    if (remote.current) {
+      (async () => {
+        try {
+          const fresh = await loadAllProjects();
+          if (cancelled) return;
+          setProjects(hydrateProjects(fresh));
+        } catch (err) {
+          console.error("Supabase initial load failed:", err);
+        } finally {
+          if (!cancelled) setHydrated(true);
+        }
+      })();
+
+      const unsub = subscribeWorkspace(() => queueRefetch());
+      return () => {
+        cancelled = true;
+        unsub();
+      };
+    }
+
+    // Modo local (sin Supabase configurado).
     const snap = persistence.load();
     if (snap && snap.projects.length > 0) {
-      setProjects(
-        snap.projects.map((p) => ({
-          ...p,
-          steps: reconcile(p.steps),
-          activeStepId:
-            p.activeStepId ??
-            deriveActiveId(reconcile(p.steps)),
-        })),
-      );
+      setProjects(hydrateProjects(snap.projects));
       lastSavedAt.current = snap.updatedAt;
     }
     setHydrated(true);
@@ -210,20 +275,18 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     const unsub = persistence.subscribe((incoming) => {
       if (incoming.updatedAt <= lastSavedAt.current) return;
       lastSavedAt.current = incoming.updatedAt;
-      setProjects(
-        incoming.projects.map((p) => ({
-          ...p,
-          steps: reconcile(p.steps),
-          activeStepId:
-            p.activeStepId ?? deriveActiveId(reconcile(p.steps)),
-        })),
-      );
+      setProjects(hydrateProjects(incoming.projects));
     });
-    return unsub;
-  }, []);
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [queueRefetch]);
 
+  /* ===== Persistencia local en modo offline ===== */
   useEffect(() => {
     if (!hydrated) return;
+    if (remote.current) return; // En modo Supabase no usamos localStorage.
     const updatedAt = Date.now();
     lastSavedAt.current = updatedAt;
     persistence.save({
@@ -233,19 +296,62 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     });
   }, [projects, hydrated]);
 
+  /* ===== Helpers de mutación ===== */
+
   const showToast = useCallback((message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(null), 2400);
   }, []);
 
+  const persistProject = useCallback(
+    (
+      project: Project,
+      patch: Partial<
+        Pick<Project, "client" | "title" | "finalDate" | "steps" | "activeStepId">
+      >,
+    ) => {
+      if (!remote.current) return;
+      void updateProjectRow(project.id, patch).catch((err) => {
+        console.error("Supabase update failed:", err);
+        showToast("Error al sincronizar");
+      });
+    },
+    [showToast],
+  );
+
+  /**
+   * Aplica un updater a un proyecto: actualiza estado local (UI instantánea)
+   * y dispara la persistencia remota con los campos del proyecto que la DB
+   * conoce (steps + activeStepId; otros patches específicos van por separado).
+   */
+  const mutateProjectSteps = useCallback(
+    (id: string, updater: (p: Project) => Project) => {
+      const captured: Project[] = [];
+      setProjects((prev) =>
+        prev.map((p) => {
+          if (p.id !== id) return p;
+          const next = updater(p);
+          captured.push(next);
+          return next;
+        }),
+      );
+      const nextSnapshot = captured[0];
+      if (nextSnapshot) {
+        persistProject(nextSnapshot, {
+          steps: nextSnapshot.steps,
+          activeStepId: nextSnapshot.activeStepId,
+        });
+      }
+    },
+    [persistProject],
+  );
+
   const updateCurrentProject = useCallback(
     (updater: (p: Project) => Project) => {
       if (!currentProjectId) return;
-      setProjects((prev) =>
-        prev.map((p) => (p.id === currentProjectId ? updater(p) : p)),
-      );
+      mutateProjectSteps(currentProjectId, updater);
     },
-    [currentProjectId],
+    [currentProjectId, mutateProjectSteps],
   );
 
   /* ===== Project CRUD ===== */
@@ -265,9 +371,17 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       };
       setProjects((prev) => [...prev, project]);
       showToast("Proyecto creado");
+
+      if (remote.current) {
+        void insertProject(project, user?.id).catch((err) => {
+          console.error("Supabase insert project failed:", err);
+          showToast("Error al sincronizar");
+        });
+      }
+
       return id;
     },
-    [showToast],
+    [showToast, user],
   );
 
   const removeProject = useCallback(
@@ -277,27 +391,45 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         router.push("/proyectos");
       }
       showToast("Proyecto eliminado");
+
+      if (remote.current) {
+        void deleteProjectRow(id).catch((err) => {
+          console.error("Supabase delete failed:", err);
+          showToast("Error al sincronizar");
+        });
+      }
     },
     [currentProjectId, router, showToast],
   );
 
   const updateProjectMeta = useCallback(
     (id: string, updates: Partial<NewProjectInput>) => {
+      const captured: Project[] = [];
       setProjects((prev) =>
-        prev.map((p) =>
-          p.id === id
-            ? {
-                ...p,
-                title: updates.title?.trim() || p.title,
-                client: updates.client?.trim() || p.client,
-                finalDate: updates.finalDate?.trim() || p.finalDate,
-              }
-            : p,
-        ),
+        prev.map((p) => {
+          if (p.id !== id) return p;
+          const next: Project = {
+            ...p,
+            title: updates.title?.trim() || p.title,
+            client: updates.client?.trim() || p.client,
+            finalDate: updates.finalDate?.trim() || p.finalDate,
+          };
+          captured.push(next);
+          return next;
+        }),
       );
       showToast("Proyecto actualizado");
+
+      const nextSnapshot = captured[0];
+      if (nextSnapshot) {
+        persistProject(nextSnapshot, {
+          client: nextSnapshot.client,
+          title: nextSnapshot.title,
+          finalDate: nextSnapshot.finalDate,
+        });
+      }
     },
-    [showToast],
+    [persistProject, showToast],
   );
 
   /* ===== Derived current-project state ===== */
@@ -534,6 +666,25 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
   const toggleChat = useCallback(() => setChatOpen((o) => !o), []);
 
+  const appendMessageOptimistic = useCallback(
+    (projectId: string, message: ChatMessage) => {
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === projectId
+            ? { ...p, messages: [...p.messages, message] }
+            : p,
+        ),
+      );
+      if (remote.current) {
+        void insertMessage(projectId, message).catch((err) => {
+          console.error("Supabase insert message failed:", err);
+          showToast("Error al enviar mensaje");
+        });
+      }
+    },
+    [showToast],
+  );
+
   const sendMessage = useCallback(
     (text: string) => {
       const trimmed = text.trim();
@@ -546,32 +697,26 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         text: trimmed,
         reacts: [],
       };
-      updateCurrentProject((p) => ({
-        ...p,
-        messages: [...p.messages, message],
-      }));
+      appendMessageOptimistic(currentProjectId, message);
 
-      window.setTimeout(() => setTyping(true), 600);
-      window.setTimeout(() => {
-        setTyping(false);
-        const reply =
-          AUTOREPLIES[Math.floor(Math.random() * AUTOREPLIES.length)];
-        updateCurrentProject((p) => ({
-          ...p,
-          messages: [
-            ...p.messages,
-            {
-              id: createId(),
-              who: reply.who,
-              time: nowTime(),
-              text: reply.text,
-              reacts: [],
-            },
-          ],
-        }));
-      }, 2200);
+      // Auto-respuesta solo en modo local. En modo remoto los compañeros responden de verdad.
+      if (!remote.current) {
+        window.setTimeout(() => setTyping(true), 600);
+        window.setTimeout(() => {
+          setTyping(false);
+          const reply =
+            AUTOREPLIES[Math.floor(Math.random() * AUTOREPLIES.length)];
+          appendMessageOptimistic(currentProjectId, {
+            id: createId(),
+            who: reply.who,
+            time: nowTime(),
+            text: reply.text,
+            reacts: [],
+          });
+        }, 2200);
+      }
     },
-    [currentProjectId, updateCurrentProject, user],
+    [currentProjectId, user, appendMessageOptimistic],
   );
 
   const broadcastDelayAlert = useCallback(() => {
@@ -591,6 +736,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     const stepName = `${target.title}${target.subtitle ? " " + target.subtitle : ""}`;
     const senderName = user?.name ?? "You";
 
+    // 1) Cambia el estado de la fase a delayed (persiste steps).
     updateCurrentProject((p) => ({
       ...p,
       steps: p.steps.map((s) =>
@@ -598,25 +744,37 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           ? { ...s, status: "delayed" as StepStatus }
           : s,
       ),
-      messages: [
-        ...p.messages,
-        {
-          id: createId(),
-          who: senderName,
-          time: nowTime(),
-          text: `⚠ Alerta de retraso difundida — la fase "${stepName}" requiere apoyo del equipo para cumplir la fecha de entrega ${target.date}.`,
-          reacts: [],
-          pinned: true,
-          alert: true,
-        },
-      ],
     }));
+
+    // 2) Inserta el mensaje de alerta (persiste messages).
+    appendMessageOptimistic(currentProjectId, {
+      id: createId(),
+      who: senderName,
+      time: nowTime(),
+      text: `⚠ Alerta de retraso difundida — la fase "${stepName}" requiere apoyo del equipo para cumplir la fecha de entrega ${target.date}.`,
+      reacts: [],
+      pinned: true,
+      alert: true,
+    });
 
     setChatOpen(true);
     showToast("Aviso de retraso difundido");
-  }, [currentProjectId, projects, updateCurrentProject, user, showToast]);
+  }, [
+    currentProjectId,
+    projects,
+    user,
+    updateCurrentProject,
+    appendMessageOptimistic,
+    showToast,
+  ]);
 
   const resetWorkspace = useCallback(() => {
+    if (remote.current) {
+      // En modo remoto sólo limpiamos lo local — no borramos del workspace
+      // compartido sin confirmación explícita por proyecto (eso es removeProject).
+      showToast("En modo equipo, elimina los proyectos uno por uno.");
+      return;
+    }
     persistence.clear();
     setProjects(INITIAL_PROJECTS);
     showToast("Workspace restaurado");
@@ -626,6 +784,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     projects,
     currentProject,
     hydrated,
+    remote: remote.current,
 
     addProject,
     removeProject,
