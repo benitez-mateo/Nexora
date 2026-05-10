@@ -16,9 +16,11 @@ import { persistence, SCHEMA_VERSION } from "./persistence";
 import { isSupabaseConfigured } from "./supabase/client";
 import {
   deleteProjectRow,
+  editMessageRow,
   insertMessage,
   insertProject,
   loadAllProjects,
+  softDeleteMessageRow,
   subscribeWorkspace,
   updateProjectRow,
 } from "./supabase/workspace";
@@ -89,6 +91,8 @@ interface WorkspaceContextValue {
   toggleChat: () => void;
   setChatOpen: (open: boolean) => void;
   sendMessage: (text: string) => void;
+  editMessage: (messageId: string, newText: string) => void;
+  deleteMessage: (messageId: string) => void;
   broadcastDelayAlert: () => void;
 
   showToast: (message: string) => void;
@@ -694,6 +698,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         id: createId(),
         who: senderName,
         avatar: user?.avatar,
+        userId: user?.id,
         time: nowTime(),
         text: trimmed,
         reacts: [],
@@ -718,6 +723,67 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       }
     },
     [currentProjectId, user, appendMessageOptimistic],
+  );
+
+  const editMessage = useCallback(
+    (messageId: string, newText: string) => {
+      const trimmed = newText.trim();
+      if (!trimmed || !currentProjectId) return;
+      const editedAt = new Date().toISOString();
+
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id !== currentProjectId
+            ? p
+            : {
+                ...p,
+                messages: p.messages.map((m) =>
+                  m.id === messageId
+                    ? { ...m, text: trimmed, editedAt }
+                    : m,
+                ),
+              },
+        ),
+      );
+
+      if (remote.current) {
+        void editMessageRow(messageId, trimmed).catch((err) => {
+          console.error("Supabase edit message failed:", err);
+          showToast("No se pudo editar el mensaje");
+        });
+      }
+    },
+    [currentProjectId, showToast],
+  );
+
+  const deleteMessage = useCallback(
+    (messageId: string) => {
+      if (!currentProjectId) return;
+      const deletedAt = new Date().toISOString();
+
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id !== currentProjectId
+            ? p
+            : {
+                ...p,
+                messages: p.messages.map((m) =>
+                  m.id === messageId
+                    ? { ...m, deletedAt, text: "" }
+                    : m,
+                ),
+              },
+        ),
+      );
+
+      if (remote.current) {
+        void softDeleteMessageRow(messageId).catch((err) => {
+          console.error("Supabase delete message failed:", err);
+          showToast("No se pudo eliminar el mensaje");
+        });
+      }
+    },
+    [currentProjectId, showToast],
   );
 
   const broadcastDelayAlert = useCallback(() => {
@@ -752,6 +818,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       id: createId(),
       who: senderName,
       avatar: user?.avatar,
+      userId: user?.id,
       time: nowTime(),
       text: `⚠ Alerta de retraso difundida — la fase "${stepName}" requiere apoyo del equipo para cumplir la fecha de entrega ${target.date}.`,
       reacts: [],
@@ -816,6 +883,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     toggleChat,
     setChatOpen,
     sendMessage,
+    editMessage,
+    deleteMessage,
     broadcastDelayAlert,
 
     showToast,

@@ -27,11 +27,14 @@ interface MessageRow {
   project_id: string;
   who: string;
   avatar: string | null;
+  user_id: string | null;
   time: string;
   text: string;
   reacts: ChatMessage["reacts"];
   pinned: boolean;
   alert: boolean;
+  edited_at: string | null;
+  deleted_at: string | null;
   created_at: string;
 }
 
@@ -53,11 +56,14 @@ function messageFromRow(row: MessageRow): ChatMessage {
     id: row.id,
     who: row.who,
     avatar: row.avatar ?? undefined,
+    userId: row.user_id ?? undefined,
     time: row.time,
     text: row.text,
     reacts: row.reacts ?? [],
     pinned: row.pinned,
     alert: row.alert,
+    editedAt: row.edited_at ?? undefined,
+    deletedAt: row.deleted_at ?? undefined,
   };
 }
 
@@ -146,12 +152,37 @@ export async function insertMessage(projectId: string, message: ChatMessage) {
     project_id: projectId,
     who: message.who,
     avatar: message.avatar ?? null,
+    user_id: message.userId ?? null,
     time: message.time,
     text: message.text,
     reacts: message.reacts ?? [],
     pinned: Boolean(message.pinned),
     alert: Boolean(message.alert),
   });
+  if (error) throw error;
+}
+
+export async function editMessageRow(id: string, text: string) {
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+  const { error } = await supabase
+    .from("messages")
+    .update({ text, edited_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw error;
+}
+
+export async function softDeleteMessageRow(id: string) {
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+  const { error } = await supabase
+    .from("messages")
+    .update({
+      deleted_at: new Date().toISOString(),
+      // Vaciamos el texto para no exponerlo en la base de datos.
+      text: "",
+    })
+    .eq("id", id);
   if (error) throw error;
 }
 

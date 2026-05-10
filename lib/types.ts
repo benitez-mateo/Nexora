@@ -29,6 +29,12 @@ export interface ChatMessage {
   text: string;
   /** Avatar del autor en el momento de enviar. Puede ser un id de preset o un data-URL. */
   avatar?: string;
+  /** ID del usuario autor — permite chequeos de propiedad confiables. */
+  userId?: string;
+  /** Si está editado, timestamp ISO del último edit. */
+  editedAt?: string;
+  /** Si está eliminado, timestamp ISO. El texto entonces no se renderiza. */
+  deletedAt?: string;
   reacts?: ChatReaction[];
   pinned?: boolean;
   alert?: boolean;
