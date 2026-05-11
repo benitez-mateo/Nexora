@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Avatar } from "@/components/primitives/Avatar";
 import { safeFromTo, safeTo } from "@/lib/gsap";
-import { formatBytes, MAX_FILE_SIZE } from "@/lib/supabase/storage";
 import { useMediaQuery, BREAKPOINT } from "@/lib/use-media-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { Message } from "./Message";
@@ -16,16 +15,11 @@ export function ChatPanel() {
     typing,
     sendMessage,
     broadcastDelayAlert,
-    showToast,
-    remote,
   } = useWorkspace();
 
   const [draft, setDraft] = useState("");
-  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
-  const [sending, setSending] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const mounted = useRef(false);
   const isDesktop = useMediaQuery(BREAKPOINT.lg);
 
@@ -62,46 +56,10 @@ export function ChatPanel() {
 
   if (!chatOpen) return null;
 
-  const handleSend = async () => {
-    if (sending) return;
-    if (!draft.trim() && pendingFiles.length === 0) return;
-    const text = draft;
-    const files = pendingFiles;
+  const handleSend = () => {
+    if (!draft.trim()) return;
+    sendMessage(draft);
     setDraft("");
-    setPendingFiles([]);
-    setSending(true);
-    try {
-      await sendMessage(text, files);
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    if (files.length === 0) return;
-
-    if (!remote) {
-      showToast("Conecta Supabase para subir archivos al chat.");
-      e.target.value = "";
-      return;
-    }
-
-    const accepted: File[] = [];
-    for (const f of files) {
-      if (f.size > MAX_FILE_SIZE) {
-        showToast(`"${f.name}" supera 25 MB y no se puede subir.`);
-        continue;
-      }
-      accepted.push(f);
-    }
-    setPendingFiles((prev) => [...prev, ...accepted]);
-    // Reset para que el mismo archivo se pueda seleccionar de nuevo si lo quitas.
-    e.target.value = "";
-  };
-
-  const removePendingFile = (idx: number) => {
-    setPendingFiles((prev) => prev.filter((_, i) => i !== idx));
   };
 
   return (
@@ -238,17 +196,6 @@ export function ChatPanel() {
       </div>
 
       <div className="p-3 border-t border-hairline-2">
-        {pendingFiles.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mb-2">
-            {pendingFiles.map((f, i) => (
-              <PendingFileChip
-                key={`${f.name}-${i}`}
-                file={f}
-                onRemove={() => removePendingFile(i)}
-              />
-            ))}
-          </div>
-        )}
         <div
           className="flex items-center gap-2 rounded-full pl-4 pr-2 py-1.5 border border-hairline"
           style={{ background: "var(--paper-2)" }}
@@ -262,43 +209,13 @@ export function ChatPanel() {
                 handleSend();
               }
             }}
-            placeholder={
-              sending ? "Subiendo…" : "Escribe un mensaje…"
-            }
-            disabled={sending}
-            className="flex-1 border-0 outline-0 bg-transparent text-ink font-sans text-[13px] py-2 disabled:opacity-60"
+            placeholder="Escribe un mensaje…"
+            className="flex-1 border-0 outline-0 bg-transparent text-ink font-sans text-[13px] py-2"
             aria-label="Mensaje"
           />
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            onChange={handleFilePick}
-            className="hidden"
-            accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip"
-          />
-          <IconBtn
-            label="Adjuntar archivo"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M21 12.5L12.5 21a5 5 0 0 1-7-7l9-9a3.5 3.5 0 1 1 5 5l-9 9a2 2 0 0 1-3-3l8-8" />
-            </svg>
-          </IconBtn>
           <button
             onClick={handleSend}
-            disabled={
-              sending || (!draft.trim() && pendingFiles.length === 0)
-            }
+            disabled={!draft.trim()}
             title="Enviar"
             aria-label="Enviar"
             className="w-[34px] h-[34px] rounded-full grid place-items-center text-white transition-transform hover:-translate-y-0.5 hover:-rotate-6 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:rotate-0"
@@ -307,33 +224,18 @@ export function ChatPanel() {
               boxShadow: "0 4px 12px rgba(27,61,255,0.28)",
             }}
           >
-            {sending ? (
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                className="animate-spin"
-              >
-                <path d="M21 12a9 9 0 1 1-6.2-8.55" />
-              </svg>
-            ) : (
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
-              </svg>
-            )}
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
+            </svg>
           </button>
         </div>
       </div>
@@ -375,92 +277,3 @@ function Dot({ delay }: { delay: number }) {
   );
 }
 
-function PendingFileChip({
-  file,
-  onRemove,
-}: {
-  file: File;
-  onRemove: () => void;
-}) {
-  const isImage = file.type.startsWith("image/");
-  const isVideo = file.type.startsWith("video/");
-
-  return (
-    <div
-      className="flex items-center gap-1.5 rounded-full pl-2 pr-1 py-1 border border-hairline max-w-full"
-      style={{ background: "var(--paper-2)" }}
-    >
-      <span
-        className="w-5 h-5 rounded grid place-items-center shrink-0"
-        style={{ background: "var(--cobalt-soft)", color: "var(--cobalt)" }}
-        aria-hidden
-      >
-        {isImage ? (
-          <svg
-            width="11"
-            height="11"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <rect x="3" y="3" width="18" height="18" rx="2" />
-            <circle cx="8.5" cy="8.5" r="1.5" />
-            <path d="M21 15l-5-5L5 21" />
-          </svg>
-        ) : isVideo ? (
-          <svg
-            width="11"
-            height="11"
-            viewBox="0 0 24 24"
-            fill="currentColor"
-          >
-            <path d="M8 5v14l11-7z" />
-          </svg>
-        ) : (
-          <svg
-            width="11"
-            height="11"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <path d="M14 2v6h6" />
-          </svg>
-        )}
-      </span>
-      <span
-        className="text-[11px] truncate max-w-[140px]"
-        title={file.name}
-      >
-        {file.name}
-      </span>
-      <span className="font-mono text-[9px] text-muted shrink-0">
-        {formatBytes(file.size)}
-      </span>
-      <button
-        onClick={onRemove}
-        aria-label={`Quitar ${file.name}`}
-        className="w-5 h-5 rounded-full grid place-items-center text-muted hover:bg-paper transition-colors shrink-0"
-      >
-        <svg
-          width="10"
-          height="10"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-        >
-          <path d="M6 6l12 12M18 6L6 18" />
-        </svg>
-      </button>
-    </div>
-  );
-}

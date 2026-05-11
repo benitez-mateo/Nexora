@@ -31,7 +31,6 @@ interface MessageRow {
   time: string;
   text: string;
   reacts: ChatMessage["reacts"];
-  attachments: ChatMessage["attachments"];
   pinned: boolean;
   alert: boolean;
   edited_at: string | null;
@@ -61,7 +60,6 @@ function messageFromRow(row: MessageRow): ChatMessage {
     time: row.time,
     text: row.text,
     reacts: row.reacts ?? [],
-    attachments: row.attachments ?? [],
     pinned: row.pinned,
     alert: row.alert,
     editedAt: row.edited_at ?? undefined,
@@ -158,23 +156,9 @@ export async function insertMessage(projectId: string, message: ChatMessage) {
     time: message.time,
     text: message.text,
     reacts: message.reacts ?? [],
-    attachments: message.attachments ?? [],
     pinned: Boolean(message.pinned),
     alert: Boolean(message.alert),
   });
-  if (error) throw error;
-}
-
-export async function updateMessageAttachments(
-  id: string,
-  attachments: NonNullable<ChatMessage["attachments"]>,
-) {
-  const supabase = getSupabaseClient();
-  if (!supabase) return;
-  const { error } = await supabase
-    .from("messages")
-    .update({ attachments })
-    .eq("id", id);
   if (error) throw error;
 }
 

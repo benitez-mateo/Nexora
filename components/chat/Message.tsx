@@ -3,14 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Avatar } from "@/components/primitives/Avatar";
 import { useAuth } from "@/lib/auth-context";
-import {
-  formatBytes,
-  isImage,
-  isVideo,
-} from "@/lib/supabase/storage";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
-import type { Attachment, ChatMessage } from "@/lib/types";
+import type { ChatMessage } from "@/lib/types";
 
 export function Message({ m }: { m: ChatMessage }) {
   const { user } = useAuth();
@@ -72,21 +67,12 @@ export function Message({ m }: { m: ChatMessage }) {
           />
         ) : (
           <BubbleRow mine={mine}>
-            <div className={cn("flex flex-col gap-1.5", mine && "items-end")}>
-              {!isDeleted &&
-                m.attachments &&
-                m.attachments.length > 0 && (
-                  <Attachments items={m.attachments} mine={mine} />
-                )}
-              {(m.text.length > 0 || isDeleted) && (
-                <Bubble
-                  isAlert={isAlert}
-                  mine={mine}
-                  isDeleted={isDeleted}
-                  text={m.text}
-                />
-              )}
-            </div>
+            <Bubble
+              isAlert={isAlert}
+              mine={mine}
+              isDeleted={isDeleted}
+              text={m.text}
+            />
             {mine && !isDeleted && (
               <MessageMenu
                 onEdit={() => setEditing(true)}
@@ -401,138 +387,3 @@ function EditBubble({
   );
 }
 
-function Attachments({
-  items,
-  mine,
-}: {
-  items: Attachment[];
-  mine: boolean;
-}) {
-  return (
-    <div className={cn("flex flex-col gap-1.5 max-w-[240px]", mine && "items-end")}>
-      {items.map((att, i) => (
-        <AttachmentItem key={`${att.url}-${i}`} att={att} mine={mine} />
-      ))}
-    </div>
-  );
-}
-
-function AttachmentItem({
-  att,
-  mine,
-}: {
-  att: Attachment;
-  mine: boolean;
-}) {
-  if (isImage(att)) {
-    return (
-      <a
-        href={att.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="block rounded-[12px] overflow-hidden border border-hairline-2 hover:opacity-90 transition-opacity"
-        style={{
-          maxWidth: 240,
-          background: "var(--paper-2)",
-          borderTopRightRadius: mine ? 4 : 12,
-          borderTopLeftRadius: mine ? 12 : 4,
-        }}
-      >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={att.url}
-          alt={att.name}
-          className="block w-full h-auto max-h-[240px] object-cover"
-          loading="lazy"
-        />
-      </a>
-    );
-  }
-
-  if (isVideo(att)) {
-    return (
-      <video
-        src={att.url}
-        controls
-        preload="metadata"
-        className="block rounded-[12px] border border-hairline-2 max-w-[240px]"
-        style={{
-          background: "black",
-          borderTopRightRadius: mine ? 4 : 12,
-          borderTopLeftRadius: mine ? 12 : 4,
-        }}
-      >
-        Tu navegador no soporta video.
-      </video>
-    );
-  }
-
-  // Cualquier otro tipo: tarjeta de descarga.
-  return (
-    <a
-      href={att.url}
-      target="_blank"
-      rel="noopener noreferrer"
-      download={att.name}
-      className="flex items-center gap-2.5 px-3 py-2.5 rounded-[12px] border border-hairline hover:border-cobalt transition-colors max-w-[240px]"
-      style={{
-        background: mine ? "rgba(255,255,255,0.12)" : "var(--paper-2)",
-        color: mine ? "white" : "var(--ink)",
-        borderTopRightRadius: mine ? 4 : 12,
-        borderTopLeftRadius: mine ? 12 : 4,
-      }}
-    >
-      <span
-        className="w-8 h-8 rounded-lg grid place-items-center shrink-0"
-        style={{
-          background: mine ? "rgba(255,255,255,0.18)" : "var(--cobalt-soft)",
-          color: mine ? "white" : "var(--cobalt)",
-        }}
-        aria-hidden
-      >
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-          <path d="M14 2v6h6" />
-        </svg>
-      </span>
-      <div className="min-w-0 flex-1">
-        <div
-          className="text-[12.5px] truncate font-medium"
-          title={att.name}
-        >
-          {att.name}
-        </div>
-        <div
-          className="font-mono text-[10px] tracking-[0.06em] mt-0.5"
-          style={{ opacity: 0.7 }}
-        >
-          {formatBytes(att.size)}
-        </div>
-      </div>
-      <svg
-        width="14"
-        height="14"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="shrink-0"
-        style={{ opacity: 0.6 }}
-        aria-hidden
-      >
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-      </svg>
-    </a>
-  );
-}
