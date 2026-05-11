@@ -22,9 +22,12 @@ import {
   loadAllProjects,
   softDeleteMessageRow,
   subscribeWorkspace,
+  updateMessageAttachments,
   updateProjectRow,
 } from "./supabase/workspace";
+import { uploadChatFile } from "./supabase/storage";
 import type {
+  Attachment,
   ChatMessage,
   Deliverable,
   Project,
@@ -90,7 +93,7 @@ interface WorkspaceContextValue {
 
   toggleChat: () => void;
   setChatOpen: (open: boolean) => void;
-  sendMessage: (text: string) => void;
+  sendMessage: (text: string, files?: File[]) => Promise<void>;
   editMessage: (messageId: string, newText: string) => void;
   deleteMessage: (messageId: string) => void;
   broadcastDelayAlert: () => void;
@@ -690,29 +693,66 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   );
 
   const sendMessage = useCallback(
-    (text: string) => {
+    async (text: string, files: File[] = []) => {
       const trimmed = text.trim();
-      if (!trimmed || !currentProjectId) return;
+      if ((!trimmed && files.length === 0) || !currentProjectId) return;
       const senderName = user?.name ?? "You";
+      const messageId = createId();
+      const projectId = currentProjectId;
       const message: ChatMessage = {
-        id: createId(),
+        id: messageId,
         who: senderName,
         avatar: user?.avatar,
         userId: user?.id,
         time: nowTime(),
         text: trimmed,
         reacts: [],
+        attachments: [],
       };
-      appendMessageOptimistic(currentProjectId, message);
+      appendMessageOptimistic(projectId, message);
 
-      // Auto-respuesta solo en modo local. En modo remoto los compañeros responden de verdad.
-      if (!remote.current) {
+      // Si hay archivos, subimos primero a Storage y después actualizamos
+      // el mensaje con las URLs. La UI muestra "subiendo..." mientras tanto.
+      if (files.length > 0 && remote.current) {
+        try {
+          const uploaded: Attachment[] = [];
+          for (const file of files) {
+            const att = await uploadChatFile(file, projectId, messageId);
+            if (att) uploaded.push(att);
+          }
+          // Actualiza local + remote.
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id !== projectId
+                ? p
+                : {
+                    ...p,
+                    messages: p.messages.map((m) =>
+                      m.id === messageId ? { ...m, attachments: uploaded } : m,
+                    ),
+                  },
+            ),
+          );
+          await updateMessageAttachments(messageId, uploaded);
+        } catch (err) {
+          console.error("Upload failed:", err);
+          showToast(
+            err instanceof Error
+              ? err.message
+              : "No se pudieron subir los archivos",
+          );
+        }
+      }
+
+      // Auto-respuesta solo en modo local sin archivos. En modo remoto los
+      // compañeros responden de verdad.
+      if (!remote.current && files.length === 0) {
         window.setTimeout(() => setTyping(true), 600);
         window.setTimeout(() => {
           setTyping(false);
           const reply =
             AUTOREPLIES[Math.floor(Math.random() * AUTOREPLIES.length)];
-          appendMessageOptimistic(currentProjectId, {
+          appendMessageOptimistic(projectId, {
             id: createId(),
             who: reply.who,
             time: nowTime(),
@@ -722,7 +762,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         }, 2200);
       }
     },
-    [currentProjectId, user, appendMessageOptimistic],
+    [currentProjectId, user, appendMessageOptimistic, showToast],
   );
 
   const editMessage = useCallback(

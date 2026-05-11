@@ -22,6 +22,15 @@ export interface ChatReaction {
   n: number;
 }
 
+export interface Attachment {
+  url: string;
+  name: string;
+  /** Mime type, ej. "image/png", "video/mp4", "application/pdf". */
+  type: string;
+  /** Tamaño en bytes. */
+  size: number;
+}
+
 export interface ChatMessage {
   id: string;
   who: string;
@@ -36,6 +45,7 @@ export interface ChatMessage {
   /** Si está eliminado, timestamp ISO. El texto entonces no se renderiza. */
   deletedAt?: string;
   reacts?: ChatReaction[];
+  attachments?: Attachment[];
   pinned?: boolean;
   alert?: boolean;
 }
