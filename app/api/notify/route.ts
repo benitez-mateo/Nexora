@@ -12,8 +12,32 @@ const VAPID_SUBJECT = process.env.VAPID_SUBJECT ?? "mailto:admin@example.com";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const SUPABASE_SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 
-if (VAPID_PUBLIC && VAPID_PRIVATE) {
-  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC, VAPID_PRIVATE);
+/**
+ * Inicialización perezosa: solo se ejecuta cuando entra la primera request,
+ * no durante el `next build`. Así una clave malformada no rompe el deploy.
+ */
+let vapidConfigured = false;
+function ensureVapid(): { ok: boolean; error?: string } {
+  if (vapidConfigured) return { ok: true };
+  if (!VAPID_PUBLIC || !VAPID_PRIVATE) {
+    return { ok: false, error: "VAPID keys no configuradas en el servidor." };
+  }
+  // Sanitizamos: web-push rechaza padding `=` y espacios.
+  const pub = VAPID_PUBLIC.trim().replace(/=+$/, "");
+  const priv = VAPID_PRIVATE.trim().replace(/=+$/, "");
+  try {
+    webpush.setVapidDetails(VAPID_SUBJECT, pub, priv);
+    vapidConfigured = true;
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error:
+        err instanceof Error
+          ? `VAPID inválidas: ${err.message}`
+          : "VAPID inválidas",
+    };
+  }
 }
 
 interface PushSubRow {
@@ -34,9 +58,10 @@ interface NotifyBody {
 }
 
 export async function POST(req: Request) {
-  if (!VAPID_PUBLIC || !VAPID_PRIVATE) {
+  const vapidCheck = ensureVapid();
+  if (!vapidCheck.ok) {
     return NextResponse.json(
-      { ok: false, error: "VAPID keys no configuradas en el servidor." },
+      { ok: false, error: vapidCheck.error },
       { status: 503 },
     );
   }
