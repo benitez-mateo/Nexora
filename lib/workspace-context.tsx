@@ -12,8 +12,9 @@ import {
 } from "react";
 import { useAuth } from "./auth-context";
 import { AUTOREPLIES, INITIAL_PROJECTS } from "./data";
+import { notify } from "./notifications";
 import { persistence, SCHEMA_VERSION } from "./persistence";
-import { isSupabaseConfigured } from "./supabase/client";
+import { getSupabaseClient, isSupabaseConfigured } from "./supabase/client";
 import {
   deleteProjectRow,
   editMessageRow,
@@ -217,6 +218,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   // Para el modo localStorage: detección de echos en cross-tab sync.
   const lastSavedAt = useRef(0);
 
+  // IDs de mensajes ya vistos, para detectar cuáles son realmente nuevos
+  // en cada refetch y disparar notificación solo para esos.
+  const seenMessageIds = useRef<Set<string>>(new Set());
+  const userRef = useRef(user);
+  userRef.current = user;
+
   // Refetch deduplicado para no martillar Supabase si llegan muchos eventos juntos.
   const refetchTimer = useRef<number | null>(null);
   const queueRefetch = useCallback(() => {
@@ -227,7 +234,38 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     refetchTimer.current = window.setTimeout(async () => {
       try {
         const fresh = await loadAllProjects();
-        setProjects(hydrateProjects(fresh));
+        const hydrated = hydrateProjects(fresh);
+
+        // Detectar mensajes nuevos para notificar.
+        const me = userRef.current;
+        const newOnes: { msg: ChatMessage; projectId: string; projectTitle: string }[] = [];
+        for (const p of hydrated) {
+          for (const m of p.messages) {
+            if (seenMessageIds.current.has(m.id)) continue;
+            seenMessageIds.current.add(m.id);
+            // No notificar:
+            // - mensajes propios
+            // - mensajes borrados
+            // - mensajes optimistas que ya teníamos en memoria
+            if (m.deletedAt) continue;
+            if (me && (m.userId === me.id || m.who === me.name)) continue;
+            newOnes.push({ msg: m, projectId: p.id, projectTitle: p.title });
+          }
+        }
+
+        setProjects(hydrated);
+
+        // Disparar notificación para los nuevos (máx 3 a la vez, por si llegó un lote).
+        for (const { msg, projectId, projectTitle } of newOnes.slice(-3)) {
+          const title = msg.alert
+            ? `⚠ ${msg.who} difundió una alerta`
+            : `${msg.who} en ${projectTitle}`;
+          void notify(title, {
+            body: msg.text || "(mensaje sin texto)",
+            tag: `nexora-msg-${projectId}`,
+            url: `/proyectos/${projectId}`,
+          });
+        }
       } catch (err) {
         console.error("Supabase refetch failed:", err);
       }
@@ -253,7 +291,13 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         try {
           const fresh = await loadAllProjects();
           if (cancelled) return;
-          setProjects(hydrateProjects(fresh));
+          const hydrated = hydrateProjects(fresh);
+          // Pre-poblar "vistos" para no disparar notifs por mensajes
+          // existentes al cargar la página.
+          hydrated.forEach((p) =>
+            p.messages.forEach((m) => seenMessageIds.current.add(m.id)),
+          );
+          setProjects(hydrated);
         } catch (err) {
           console.error("Supabase initial load failed:", err);
         } finally {
@@ -689,12 +733,44 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     [showToast],
   );
 
+  /**
+   * Dispara una notificación push hacia el resto del equipo via /api/notify.
+   * Fire-and-forget: si falla, no afecta el envío del mensaje (que ya está
+   * persistido). Solo aplica en modo remoto.
+   */
+  const firePushToTeam = useCallback(
+    async (payload: { title: string; body: string; url: string; tag: string }) => {
+      if (!remote.current) return;
+      const supabase = getSupabaseClient();
+      if (!supabase) return;
+      try {
+        const { data } = await supabase.auth.getSession();
+        const token = data.session?.access_token;
+        if (!token) return;
+        await fetch("/api/notify", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+          keepalive: true,
+        });
+      } catch (err) {
+        console.warn("Push notify failed (ignored):", err);
+      }
+    },
+    [],
+  );
+
   const sendMessage = useCallback(
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed || !currentProjectId) return;
       const senderName = user?.name ?? "You";
       const projectId = currentProjectId;
+      const projectTitle =
+        projects.find((p) => p.id === projectId)?.title ?? "Proyecto";
       const message: ChatMessage = {
         id: createId(),
         who: senderName,
@@ -705,6 +781,13 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         reacts: [],
       };
       appendMessageOptimistic(projectId, message);
+
+      void firePushToTeam({
+        title: `${senderName} en ${projectTitle}`,
+        body: trimmed,
+        url: `/proyectos/${projectId}`,
+        tag: `nexora-msg-${projectId}`,
+      });
 
       // Auto-respuesta solo en modo local. En modo remoto los compañeros
       // responden de verdad.
@@ -724,7 +807,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         }, 2200);
       }
     },
-    [currentProjectId, user, appendMessageOptimistic],
+    [currentProjectId, projects, user, appendMessageOptimistic, firePushToTeam],
   );
 
   const editMessage = useCallback(
@@ -815,6 +898,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       ),
     }));
 
+    const alertText = `⚠ Alerta de retraso difundida — la fase "${stepName}" requiere apoyo del equipo para cumplir la fecha de entrega ${target.date}.`;
+
     // 2) Inserta el mensaje de alerta (persiste messages).
     appendMessageOptimistic(currentProjectId, {
       id: createId(),
@@ -822,10 +907,18 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       avatar: user?.avatar,
       userId: user?.id,
       time: nowTime(),
-      text: `⚠ Alerta de retraso difundida — la fase "${stepName}" requiere apoyo del equipo para cumplir la fecha de entrega ${target.date}.`,
+      text: alertText,
       reacts: [],
       pinned: true,
       alert: true,
+    });
+
+    // 3) Notifica push al resto del equipo.
+    void firePushToTeam({
+      title: `⚠ ${senderName} difundió una alerta`,
+      body: `${project.title}: la fase "${stepName}" está retrasada.`,
+      url: `/proyectos/${currentProjectId}`,
+      tag: `nexora-alert-${currentProjectId}`,
     });
 
     setChatOpen(true);
@@ -836,6 +929,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     user,
     updateCurrentProject,
     appendMessageOptimistic,
+    firePushToTeam,
     showToast,
   ]);
 

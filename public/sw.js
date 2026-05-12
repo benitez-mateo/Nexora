@@ -1,5 +1,5 @@
-/* Nexora service worker — offline shell + cache-first for static assets */
-const VERSION = "nexora-v1";
+/* Nexora SW — offline shell + cache-first + notification clicks + push */
+const VERSION = "nexora-v3";
 const STATIC_CACHE = `${VERSION}-static`;
 
 const PRECACHE_URLS = ["/", "/inicio", "/proyectos", "/equipo", "/calendario", "/reportes", "/ajustes"];
@@ -84,4 +84,84 @@ self.addEventListener("fetch", (event) => {
       })(),
     );
   }
+});
+
+/* ===========================================================================
+ * Push event: llega del servidor cuando alguien manda mensaje y la app está
+ * cerrada. Si hay una pestaña abierta y visible, no molestamos (la in-app la
+ * maneja). Si no, mostramos la notificación del SO.
+ * ========================================================================= */
+self.addEventListener("push", (event) => {
+  if (!event.data) return;
+  event.waitUntil(
+    (async () => {
+      let payload = {};
+      try {
+        payload = event.data.json();
+      } catch {
+        payload = { title: "Nexora", body: event.data.text() };
+      }
+
+      const title = payload.title || "Nexora";
+      const body = payload.body || "";
+      const url = payload.url || "/";
+      const tag = payload.tag || "nexora";
+
+      // Si hay una pestaña abierta y enfocada, evitamos duplicar
+      // (la in-app notification ya cubre ese caso).
+      const allClients = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+      const isFocused = allClients.some(
+        (c) => c.visibilityState === "visible" && c.focused,
+      );
+      if (isFocused) return;
+
+      await self.registration.showNotification(title, {
+        body,
+        icon: "/icon",
+        badge: "/icon",
+        tag,
+        data: { url },
+        renotify: true,
+      });
+    })(),
+  );
+});
+
+/* ===========================================================================
+ * Click en notificación: enfoca/abre la URL que venga en `data.url`.
+ * ========================================================================= */
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = (event.notification.data && event.notification.data.url) || "/";
+
+  event.waitUntil(
+    (async () => {
+      const allClients = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+
+      // Si ya hay una pestaña abierta de nuestra app, enfócala y navega.
+      for (const client of allClients) {
+        try {
+          const clientUrl = new URL(client.url);
+          if (clientUrl.origin === self.location.origin) {
+            await client.focus();
+            if ("navigate" in client) {
+              await client.navigate(targetUrl);
+            }
+            return;
+          }
+        } catch {
+          /* sigue intentando */
+        }
+      }
+
+      // Si no había ninguna abierta, abrimos una nueva.
+      await self.clients.openWindow(targetUrl);
+    })(),
+  );
 });

@@ -6,6 +6,20 @@ import { AvatarPicker } from "@/components/auth/AvatarPicker";
 import { PasswordInput } from "@/components/auth/PasswordInput";
 import { useAuth } from "@/lib/auth-context";
 import { DEFAULT_AVATAR } from "@/lib/avatars";
+import {
+  getNotificationPermission,
+  notificationsSupported,
+  notify,
+  requestNotificationPermission,
+  type Permission,
+} from "@/lib/notifications";
+import {
+  getPushStatus,
+  isPushSupported,
+  subscribeToPush,
+  unsubscribeFromPush,
+  type PushStatus,
+} from "@/lib/push";
 import { useTheme } from "@/lib/theme-provider";
 import { useWorkspace } from "@/lib/workspace-context";
 import { PageHeader } from "./PageHeader";
@@ -25,7 +39,7 @@ export function AjustesPage() {
         {user && <ProfileSection />}
         {user && <SecuritySection />}
         <AppearanceSection />
-        <DataSection />
+        <NotificationsSection />
         <UpcomingSection />
         {user && <DangerZoneSection />}
       </div>
@@ -289,36 +303,186 @@ function AppearanceSection() {
   );
 }
 
-function DataSection() {
-  const { resetWorkspace } = useWorkspace();
-  const [confirmReset, setConfirmReset] = useState(false);
+function NotificationsSection() {
+  const { showToast } = useWorkspace();
+  const [perm, setPerm] = useState<Permission>("default");
+  const [pushStatus, setPushStatus] = useState<PushStatus>("unsupported");
+  const [pushBusy, setPushBusy] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    setPerm(getNotificationPermission());
+    void getPushStatus().then(setPushStatus);
+    setHydrated(true);
+  }, []);
+
+  const supported = notificationsSupported();
+  const pushSupported = isPushSupported();
+
+  const enable = async () => {
+    const result = await requestNotificationPermission();
+    setPerm(result);
+    if (result === "granted") {
+      showToast("Notificaciones activadas");
+      // Demostración inmediata para que el usuario vea que funciona.
+      // Se muestra aunque la pestaña esté visible (onlyIfHidden: false).
+      void notify("Notificaciones activas", {
+        body: "Te avisaremos cuando llegue un mensaje nuevo del equipo.",
+        onlyIfHidden: false,
+        tag: "nexora-welcome",
+      });
+    } else if (result === "denied") {
+      showToast("Las notificaciones están bloqueadas en este navegador");
+    }
+  };
+
+  const testNotification = () => {
+    void notify("Esto es una prueba", {
+      body: "Si ves esto, las notificaciones están funcionando.",
+      onlyIfHidden: false,
+      tag: "nexora-test",
+    });
+  };
+
+  let badge: { label: string; tone: "ok" | "warn" | "bad" } = {
+    label: "Pendiente",
+    tone: "warn",
+  };
+  if (!supported) badge = { label: "No soportado", tone: "bad" };
+  else if (perm === "granted") badge = { label: "Activas", tone: "ok" };
+  else if (perm === "denied") badge = { label: "Bloqueadas", tone: "bad" };
+
+  let pushBadge: { label: string; tone: "ok" | "warn" | "bad" } = {
+    label: "Desactivadas",
+    tone: "warn",
+  };
+  if (!pushSupported) pushBadge = { label: "No soportado", tone: "bad" };
+  else if (pushStatus === "subscribed") pushBadge = { label: "Activas", tone: "ok" };
+
+  const tonePalette = (tone: "ok" | "warn" | "bad") => ({
+    color:
+      tone === "ok"
+        ? "var(--cobalt)"
+        : tone === "warn"
+          ? "var(--ink-2)"
+          : "var(--pink)",
+    bg:
+      tone === "ok"
+        ? "var(--cobalt-soft)"
+        : tone === "warn"
+          ? "var(--paper-2)"
+          : "var(--pink-soft)",
+  });
+  const { color: badgeColor, bg: badgeBg } = tonePalette(badge.tone);
+  const { color: pushBadgeColor, bg: pushBadgeBg } = tonePalette(pushBadge.tone);
+
+  const togglePush = async () => {
+    setPushBusy(true);
+    try {
+      if (pushStatus === "subscribed") {
+        await unsubscribeFromPush();
+        setPushStatus("unsubscribed");
+        showToast("Notificaciones con app cerrada desactivadas");
+      } else {
+        // Aseguramos permiso primero.
+        if (perm !== "granted") {
+          const granted = await requestNotificationPermission();
+          setPerm(granted);
+          if (granted !== "granted") {
+            showToast("Necesitas dar permiso de notificaciones primero");
+            return;
+          }
+        }
+        const res = await subscribeToPush();
+        if (!res.ok) {
+          showToast(res.error ?? "No se pudo activar Web Push");
+          return;
+        }
+        setPushStatus("subscribed");
+        showToast("Recibirás avisos aunque la app esté cerrada");
+      }
+    } finally {
+      setPushBusy(false);
+    }
+  };
 
   return (
-    <Section title="Datos">
+    <Section title="Notificaciones">
       <Setting
-        label="Restablecer workspace"
-        description="Borra todos los proyectos guardados en este navegador y vuelve al ejemplo inicial. No afecta tu cuenta ni a otros dispositivos."
+        label="Avisos de mensajes y alertas"
+        description="Recibe una notificación del navegador cuando tu equipo envíe un mensaje o difunda una alerta de retraso. Funciona mientras tengas la app abierta o instalada como PWA, aunque esté en segundo plano."
       >
-        <button
-          type="button"
-          onClick={() => {
-            if (!confirmReset) {
-              setConfirmReset(true);
-              return;
-            }
-            resetWorkspace();
-            setConfirmReset(false);
-          }}
-          onMouseLeave={() => setConfirmReset(false)}
-          className="px-4 py-2 rounded-lg font-mono text-[10.5px] tracking-[0.14em] uppercase transition-colors"
-          style={{
-            color: "var(--pink)",
-            background: confirmReset ? "var(--pink-soft)" : "transparent",
-            border: `1px solid ${confirmReset ? "var(--pink)" : "var(--hairline)"}`,
-          }}
-        >
-          {confirmReset ? "Confirmar" : "Restablecer"}
-        </button>
+        <div className="flex items-center gap-2">
+          {hydrated && (
+            <span
+              className="font-mono text-[9.5px] tracking-[0.14em] uppercase px-2 py-1 rounded"
+              style={{ background: badgeBg, color: badgeColor }}
+            >
+              {badge.label}
+            </span>
+          )}
+          {hydrated && supported && perm !== "granted" && (
+            <button
+              type="button"
+              onClick={enable}
+              disabled={perm === "denied"}
+              className="btn-cobalt disabled:opacity-40 disabled:cursor-not-allowed"
+              title={
+                perm === "denied"
+                  ? "Permiso bloqueado — habilítalo en los ajustes del navegador"
+                  : undefined
+              }
+            >
+              {perm === "denied" ? "Bloqueadas" : "Activar"}
+            </button>
+          )}
+          {hydrated && supported && perm === "granted" && (
+            <button
+              type="button"
+              onClick={testNotification}
+              className="btn-ghost"
+            >
+              Probar
+            </button>
+          )}
+        </div>
+      </Setting>
+
+      <Setting
+        label="Notificaciones con la app cerrada"
+        description="Web Push real: recibís avisos del equipo aunque el navegador esté cerrado o el PWA en el cajón de apps. Necesita haber dado permiso de notificaciones arriba."
+      >
+        <div className="flex items-center gap-2">
+          {hydrated && (
+            <span
+              className="font-mono text-[9.5px] tracking-[0.14em] uppercase px-2 py-1 rounded"
+              style={{ background: pushBadgeBg, color: pushBadgeColor }}
+            >
+              {pushBadge.label}
+            </span>
+          )}
+          {hydrated && pushSupported && (
+            <button
+              type="button"
+              onClick={togglePush}
+              disabled={pushBusy || (perm === "denied" && pushStatus !== "subscribed")}
+              className={
+                pushStatus === "subscribed" ? "btn-ghost" : "btn-cobalt"
+              }
+              style={
+                pushStatus === "subscribed"
+                  ? { borderColor: "var(--pink)", color: "var(--pink)" }
+                  : undefined
+              }
+            >
+              {pushBusy
+                ? "..."
+                : pushStatus === "subscribed"
+                  ? "Desactivar"
+                  : "Activar"}
+            </button>
+          )}
+        </div>
       </Setting>
     </Section>
   );
@@ -328,20 +492,32 @@ function UpcomingSection() {
   return (
     <Section title="Próximamente">
       <Setting
-        label="Conexión a backend"
-        description="Conectar con Supabase / Postgres para sincronización entre dispositivos del equipo."
+        label="Asignación de fases"
+        description="Asignar cada fase del proyecto a un miembro específico del equipo y filtrar tareas por persona."
       >
         <UpcomingPill />
       </Setting>
       <Setting
-        label="Notificaciones por email"
-        description="Recibir alertas de retraso o nuevos mensajes por correo."
+        label="Exportar reportes a PDF"
+        description="Descargar el progreso de un proyecto como PDF para mandar al cliente."
+      >
+        <UpcomingPill />
+      </Setting>
+      <Setting
+        label="Comentarios en entregables"
+        description="Discutir cada entregable por separado, no solo en el chat general del proyecto."
+      >
+        <UpcomingPill />
+      </Setting>
+      <Setting
+        label="Búsqueda global"
+        description="Buscar proyectos, fases o mensajes desde cualquier parte de la app."
       >
         <UpcomingPill />
       </Setting>
       <Setting
         label="Pasarelas de pago"
-        description="Stripe para facturar entregables al cliente."
+        description="Stripe / MercadoPago para facturar entregables al cliente desde la propia app."
       >
         <UpcomingPill />
       </Setting>
